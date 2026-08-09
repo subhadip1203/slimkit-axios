@@ -1,0 +1,24 @@
+node_modules/
+.npm-cache/
+npm-debug.log*
+*.log
+
+# Local AI/development notes
+.claude/
+task.md
+
+*.tsbuildinfo
+
+dist/
+coverage/
+*.tgz
+
+.env
+.env.*
+
+.DS_Store
+Thumbs.db
+
+.vscode/*
+!.vscode/extensions.json
+.idea/

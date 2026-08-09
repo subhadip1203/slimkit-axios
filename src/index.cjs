@@ -1,0 +1,578 @@
+'use strict';
+
+const VERSION = '0.1.0';
+
+const isPlainObject = value => {
+  if (Object.prototype.toString.call(value) !== '[object Object]') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
+};
+const isFormData = value => typeof FormData !== 'undefined' && value instanceof FormData;
+const isURLSearchParams = value => typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams;
+
+function forEach(obj, fn) {
+  if (obj == null) return;
+  if (typeof obj !== 'object') obj = [obj];
+  if (Array.isArray(obj)) obj.forEach(fn);
+  else Object.keys(obj).forEach(key => fn(obj[key], key, obj));
+}
+
+function mergeDeep(...sources) {
+  const result = {};
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (isPlainObject(value) && isPlainObject(result[key])) result[key] = mergeDeep(result[key], value);
+      else if (isPlainObject(value)) result[key] = mergeDeep({}, value);
+      else if (Array.isArray(value)) result[key] = value.slice();
+      else if (value !== undefined) result[key] = value;
+    }
+  }
+  return result;
+}
+
+class AxiosHeaders {
+  constructor(headers) {
+    this._headers = new Map();
+    if (typeof headers === 'string') {
+      for (const line of headers.split(/\r?\n/)) {
+        const index = line.indexOf(':');
+        if (index > 0) this.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+      }
+    } else if (headers && typeof headers.entries === 'function' && !(headers instanceof AxiosHeaders)) {
+      for (const [name, value] of headers.entries()) this.set(name, value);
+      if (typeof headers.getSetCookie === 'function') {
+        const cookies = headers.getSetCookie();
+        if (cookies.length) this.set('set-cookie', cookies);
+      }
+    } else if (headers) this.set(headers);
+  }
+  set(name, value, rewrite = true) {
+    if (name && typeof name === 'object' && !Array.isArray(name)) {
+      const source = name instanceof AxiosHeaders ? name.toJSON() : name;
+      forEach(source, (v, k) => this.set(k, v, value));
+      return this;
+    }
+    const key = String(name).trim().toLowerCase();
+    if (!key || value == null || value === false) return this;
+    const current = this._headers.get(key);
+    if (!current || rewrite === true || (typeof rewrite === 'function' && rewrite(current.value, current.name, this))) {
+      this._headers.set(key, { name: String(name).trim(), value: key === 'set-cookie' && Array.isArray(value) ? value.slice() : Array.isArray(value) ? value.join(', ') : String(value) });
+    }
+    return this;
+  }
+  get(name, parser) {
+    const item = this._headers.get(String(name).toLowerCase());
+    if (!item) return undefined;
+    if (parser === true) return Object.fromEntries(item.value.split(/\s*;\s*/).map(x => { const i = x.indexOf('='); return i < 0 ? [x, undefined] : [x.slice(0, i), x.slice(i + 1)]; }));
+    if (parser instanceof RegExp) return item.value.match(parser);
+    return typeof parser === 'function' ? parser(item.value, item.name) : item.value;
+  }
+  has(name, matcher) {
+    const value = this.get(name);
+    return value !== undefined && (!matcher || (typeof matcher === 'function' ? matcher(value, name, this) : new RegExp(matcher).test(value)));
+  }
+  delete(name, matcher) {
+    const names = Array.isArray(name) ? name : [name];
+    let deleted = false;
+    for (const n of names) if (this.has(n, matcher)) deleted = this._headers.delete(String(n).toLowerCase()) || deleted;
+    return deleted;
+  }
+  clear(matcher) {
+    let cleared = false;
+    for (const { name, value } of this._headers.values()) {
+      if (!matcher || (typeof matcher === 'function' ? matcher(value, name, this) : new RegExp(matcher).test(name))) cleared = this.delete(name) || cleared;
+    }
+    return cleared;
+  }
+  normalize(format) {
+    if (format) for (const item of this._headers.values()) item.name = item.name.toLowerCase().replace(/(^|[-\s])\w/g, c => c.toUpperCase());
+    return this;
+  }
+  concat(...targets) { return AxiosHeaders.concat(this, ...targets); }
+  toJSON(asStrings = false) {
+    const out = Object.create(null);
+    for (const { name, value } of this._headers.values()) out[name] = asStrings ? String(value) : value;
+    return out;
+  }
+  toString() { return Object.entries(this.toJSON()).map(([k, v]) => `${k}: ${v}`).join('\n'); }
+  getSetCookie() {
+    const value = this.get('set-cookie');
+    return value === undefined ? [] : Array.isArray(value) ? value.slice() : [value];
+  }
+  [Symbol.iterator]() { return Object.entries(this.toJSON())[Symbol.iterator](); }
+  static from(value) { return value instanceof this ? value : new this(value); }
+  static concat(first, ...targets) { const headers = new this(first); targets.forEach(x => headers.set(x)); return headers; }
+  static accessor(names) {
+    for (const name of Array.isArray(names) ? names : [names]) {
+      const suffix = name.replace(/(^|-)(\w)/g, (_, __, c) => c.toUpperCase());
+      this.prototype[`get${suffix}`] = function () { return this.get(name); };
+      this.prototype[`set${suffix}`] = function (v, r) { return this.set(name, v, r); };
+      this.prototype[`has${suffix}`] = function (m) { return this.has(name, m); };
+    }
+    return this;
+  }
+}
+AxiosHeaders.accessor(['Content-Type', 'Content-Length', 'Accept', 'Accept-Encoding', 'User-Agent', 'Authorization']);
+
+class AxiosError extends Error {
+  constructor(message, code, config, request, response) {
+    super(message); this.name = 'AxiosError'; this.code = code; this.config = config; this.request = request; this.response = response; this.isAxiosError = true;
+    if (response) this.status = response.status;
+  }
+  toJSON() { return { message: this.message, name: this.name, stack: this.stack, config: this.config, code: this.code, status: this.status }; }
+  static from(error, code, config, request, response, customProps) {
+    const out = new AxiosError(error.message, code, config, request, response);
+    out.cause = error; Object.assign(out, customProps); return out;
+  }
+}
+Object.assign(AxiosError, { ERR_BAD_OPTION_VALUE: 'ERR_BAD_OPTION_VALUE', ERR_BAD_OPTION: 'ERR_BAD_OPTION', ECONNABORTED: 'ECONNABORTED', ECONNREFUSED: 'ECONNREFUSED', ETIMEDOUT: 'ETIMEDOUT', ERR_NETWORK: 'ERR_NETWORK', ERR_FR_TOO_MANY_REDIRECTS: 'ERR_FR_TOO_MANY_REDIRECTS', ERR_DEPRECATED: 'ERR_DEPRECATED', ERR_BAD_RESPONSE: 'ERR_BAD_RESPONSE', ERR_BAD_REQUEST: 'ERR_BAD_REQUEST', ERR_CANCELED: 'ERR_CANCELED', ERR_NOT_SUPPORT: 'ERR_NOT_SUPPORT', ERR_INVALID_URL: 'ERR_INVALID_URL', ERR_FORM_DATA_DEPTH_EXCEEDED: 'ERR_FORM_DATA_DEPTH_EXCEEDED' });
+
+class CanceledError extends AxiosError {
+  constructor(message = 'canceled', config, request) { super(message, AxiosError.ERR_CANCELED, config, request); this.name = 'CanceledError'; this.__CANCEL__ = true; }
+}
+
+class CancelToken {
+  constructor(executor) {
+    if (typeof executor !== 'function') throw new TypeError('executor must be a function');
+    let resolve;
+    this.promise = new Promise(r => { resolve = r; });
+    this._listeners = [];
+    this.promise.then(reason => this._listeners.splice(0).forEach(fn => fn(reason)));
+    executor(message => { if (!this.reason) { this.reason = new CanceledError(message); resolve(this.reason); } });
+  }
+  throwIfRequested() { if (this.reason) throw this.reason; }
+  subscribe(listener) { this.reason ? listener(this.reason) : this._listeners.push(listener); }
+  unsubscribe(listener) { const i = this._listeners.indexOf(listener); if (i >= 0) this._listeners.splice(i, 1); }
+  toAbortSignal() { const controller = new AbortController(); this.subscribe(reason => controller.abort(reason)); return controller.signal; }
+  static source() { let cancel; return { token: new CancelToken(c => { cancel = c; }), cancel }; }
+}
+
+class InterceptorManager {
+  constructor() { this.handlers = []; }
+  use(fulfilled, rejected, options = {}) { this.handlers.push({ fulfilled, rejected, synchronous: !!options.synchronous, runWhen: options.runWhen }); return this.handlers.length - 1; }
+  eject(id) { if (this.handlers[id]) this.handlers[id] = null; }
+  clear() { this.handlers = []; }
+  forEach(fn) { this.handlers.forEach(h => h && fn(h)); }
+}
+
+function encode(value) { return encodeURIComponent(value).replace(/%3A/gi, ':').replace(/%24/g, '$').replace(/%2C/gi, ',').replace(/%20/g, '+'); }
+class AxiosURLSearchParams {
+  constructor(params, options) { this._pairs = []; if (params) toFormData(params, this, options); }
+  append(name, value) { this._pairs.push([name, value]); }
+  toString(encoder) { const e = encoder || encode; return this._pairs.map(([k, v]) => `${e(k)}=${e(v)}`).join('&'); }
+}
+const DEFAULT_FORM_DATA_MAX_DEPTH = 100;
+function toFormData(obj, formData, options = {}) {
+  const target = formData || (typeof FormData !== 'undefined' ? new FormData() : new AxiosURLSearchParams());
+  const dots = !!options.dots;
+  const maxDepth = options.maxDepth === undefined ? DEFAULT_FORM_DATA_MAX_DEPTH : options.maxDepth;
+  const isVisitable = value => Array.isArray(value) || isPlainObject(value);
+  const convertValue = value => value instanceof Date ? value.toISOString() : value;
+  const renderKey = (path, key) => path && path.length
+    ? dots ? `${path.join('.')}.${key}` : `${path[0]}${path.slice(1).map(part => `[${part}]`).join('')}[${key}]`
+    : String(key);
+  const defaultVisitor = (value, key, path = []) => {
+    const field = renderKey(path, key);
+    if (value == null) return false;
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => {
+      const nested = Array.isArray(v) || isPlainObject(v);
+      const suffix = nested || options.indexes === true ? `[${i}]` : options.indexes === null ? '' : '[]';
+        if (nested) visitChildren(v, [...path, key, i]);
+        else target.append(dots && options.indexes === true ? `${field}.${i}` : `${field}${suffix}`, convertValue(v));
+      });
+      return false;
+    }
+    if (isPlainObject(value)) { visitChildren(value, [...path, key]); return false; }
+    target.append(field, convertValue(value));
+    return false;
+  };
+  const helpers = { defaultVisitor, convertValue, isVisitable };
+  const visitor = typeof options.visitor === 'function' ? options.visitor : defaultVisitor;
+  const visitChildren = (value, path = []) => {
+    if (path.length > maxDepth) throw new AxiosError(`Object is too deeply nested (${path.length} levels). Max depth: ${maxDepth}`, AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED);
+    for (const [key, child] of Object.entries(value)) {
+      const shouldVisit = visitor.call(target, child, key, path.length ? path : undefined, helpers);
+      if (shouldVisit === true && isVisitable(child)) visitChildren(child, [...path, key]);
+    }
+  };
+  if (!isPlainObject(obj)) throw new TypeError('target must be an object');
+  visitChildren(obj);
+  return target;
+}
+function formToJSON(form) {
+  if (!form || typeof form.entries !== 'function') return null;
+  const out = {};
+  for (const [key, value] of form.entries()) out[key] = out[key] === undefined ? value : [].concat(out[key], value);
+  return out;
+}
+function buildURL(url, params, serializer) {
+  if (!params) return url;
+  let serialized;
+  if (typeof serializer === 'function') serialized = serializer(params);
+  else if (serializer && serializer.serialize) serialized = serializer.serialize(params, serializer);
+  else serialized = isURLSearchParams(params) ? params.toString() : new AxiosURLSearchParams(params, serializer).toString(serializer && serializer.encode);
+  if (!serialized) return url;
+  const hash = url.indexOf('#'); if (hash >= 0) url = url.slice(0, hash);
+  return `${url}${url.includes('?') ? '&' : '?'}${serialized}`;
+}
+function combineURLs(base, relative) { return relative ? `${base.replace(/\/+$/, '')}/${relative.replace(/^\/+/, '')}` : base; }
+function isAbsoluteURL(url) { return /^[a-z][a-z\d+\-.]*:/i.test(url) || /^\/\//.test(url); }
+function getUri(config) { const full = config.baseURL && (!isAbsoluteURL(config.url || '') || config.allowAbsoluteUrls === false) ? combineURLs(config.baseURL, config.url || '') : (config.url || ''); return buildURL(full, config.params, config.paramsSerializer); }
+
+const httpStatusCodes = {
+  Continue: 100, SwitchingProtocols: 101, Processing: 102, EarlyHints: 103,
+  Ok: 200, Created: 201, Accepted: 202, NonAuthoritativeInformation: 203, NoContent: 204, ResetContent: 205, PartialContent: 206, MultiStatus: 207, AlreadyReported: 208, ImUsed: 226,
+  MultipleChoices: 300, MovedPermanently: 301, Found: 302, SeeOther: 303, NotModified: 304, UseProxy: 305, TemporaryRedirect: 307, PermanentRedirect: 308,
+  BadRequest: 400, Unauthorized: 401, PaymentRequired: 402, Forbidden: 403, NotFound: 404, MethodNotAllowed: 405, NotAcceptable: 406, ProxyAuthenticationRequired: 407, RequestTimeout: 408, Conflict: 409, Gone: 410, LengthRequired: 411, PreconditionFailed: 412, PayloadTooLarge: 413, UriTooLong: 414, UnsupportedMediaType: 415, RangeNotSatisfiable: 416, ExpectationFailed: 417, ImATeapot: 418, MisdirectedRequest: 421, UnprocessableEntity: 422, Locked: 423, FailedDependency: 424, TooEarly: 425, UpgradeRequired: 426, PreconditionRequired: 428, TooManyRequests: 429, RequestHeaderFieldsTooLarge: 431, UnavailableForLegalReasons: 451,
+  InternalServerError: 500, NotImplemented: 501, BadGateway: 502, ServiceUnavailable: 503, GatewayTimeout: 504, HttpVersionNotSupported: 505, VariantAlsoNegotiates: 506, InsufficientStorage: 507, LoopDetected: 508, NotExtended: 510, NetworkAuthenticationRequired: 511
+};
+for (const [name, status] of Object.entries(httpStatusCodes)) httpStatusCodes[status] = name;
+const HttpStatusCode = Object.freeze(httpStatusCodes);
+
+const defaults = {
+  timeout: 0,
+  xsrfCookieName: 'XSRF-TOKEN', xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1, maxBodyLength: -1,
+  validateStatus: status => status >= 200 && status < 300,
+  headers: { common: { Accept: 'application/json, text/plain, */*' }, delete: {}, get: {}, head: {}, post: {}, put: {}, patch: {}, query: {}, options: {} },
+  transformRequest: [function (data, headers) {
+    if (isFormData(data) || data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data) || typeof data === 'string' || data instanceof ReadableStream) return data;
+    if (isURLSearchParams(data)) { headers.set('Content-Type', 'application/x-www-form-urlencoded;charset=utf-8', false); return data.toString(); }
+    if (isPlainObject(data)) {
+      const contentType = headers.get('Content-Type') || '';
+      if (/application\/x-www-form-urlencoded/i.test(contentType)) return new AxiosURLSearchParams(data, this.formSerializer).toString();
+      if (/multipart\/form-data/i.test(contentType)) {
+        const FormDataClass = this.env && this.env.FormData || globalThis.FormData;
+        return toFormData(data, FormDataClass ? new FormDataClass() : undefined, this.formSerializer);
+      }
+      headers.set('Content-Type', 'application/json', false); return JSON.stringify(data);
+    }
+    return data;
+  }],
+  transformResponse: [function (data) {
+    if (typeof data !== 'string') return data;
+    const forced = this.transitional ? this.transitional.forcedJSONParsing !== false : true;
+    if (this.responseType === 'json' || (forced && !this.responseType)) {
+      try { return JSON.parse(data, this.parseReviver); } catch (e) { if (this.responseType === 'json' && (!this.transitional || this.transitional.silentJSONParsing === false)) throw AxiosError.from(e, AxiosError.ERR_BAD_RESPONSE, this); }
+    }
+    return data;
+  }],
+  transitional: { silentJSONParsing: true, forcedJSONParsing: true, clarifyTimeoutError: false }
+};
+
+const TRANSITIONAL_OPTION_KEYS = ['silentJSONParsing', 'forcedJSONParsing', 'clarifyTimeoutError', 'legacyInterceptorReqResOrdering', 'advertiseZstdAcceptEncoding', 'validateStatusUndefinedResolves'];
+function assertTransitional(transitional) {
+  if (transitional === undefined) return;
+  if (!isPlainObject(transitional)) throw new AxiosError('option transitional must be an object', AxiosError.ERR_BAD_OPTION_VALUE);
+  for (const key of Object.keys(transitional)) {
+    if (!TRANSITIONAL_OPTION_KEYS.includes(key)) throw new AxiosError(`Unknown option ${key}`, AxiosError.ERR_BAD_OPTION);
+    if (transitional[key] !== undefined && typeof transitional[key] !== 'boolean') throw new AxiosError(`option ${key} must be a boolean`, AxiosError.ERR_BAD_OPTION_VALUE);
+  }
+}
+
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+function getMergedValue(target, source) {
+  if (isPlainObject(target) && isPlainObject(source)) return mergeDeep(target, source);
+  if (isPlainObject(source)) return mergeDeep({}, source);
+  if (Array.isArray(source)) return source.slice();
+  return source;
+}
+function mergeConfig(config1 = {}, config2 = {}) {
+  const config = mergeDeep(config1, config2);
+  for (const key of ['url', 'method', 'data']) {
+    if (hasOwn(config2, key)) config[key] = getMergedValue(undefined, config2[key]);
+    else delete config[key];
+  }
+  if (hasOwn(config2, 'validateStatus')) config.validateStatus = config2.validateStatus;
+  else if (hasOwn(config1, 'validateStatus')) config.validateStatus = config1.validateStatus;
+  else delete config.validateStatus;
+  if (hasOwn(config1, 'headers') || hasOwn(config2, 'headers')) {
+    const firstHeaders = config1.headers instanceof AxiosHeaders ? config1.headers.toJSON() : config1.headers || {};
+    const secondHeaders = config2.headers instanceof AxiosHeaders ? config2.headers.toJSON() : config2.headers || {};
+    config.headers = mergeDeep(firstHeaders, secondHeaders);
+  } else delete config.headers;
+  return config;
+}
+function flattenHeaders(headers, method) {
+  const raw = headers instanceof AxiosHeaders ? headers.toJSON() : headers || {};
+  const merged = mergeDeep(raw.common, raw[method], Object.fromEntries(Object.entries(raw).filter(([k]) => !['common', 'delete', 'get', 'head', 'post', 'put', 'patch', 'query', 'options'].includes(k))));
+  return AxiosHeaders.from(merged);
+}
+function transformData(fns, config, data, headers, response) { for (const fn of [].concat(fns || [])) data = fn.call(config, data, headers, response && response.status); return data; }
+
+function composeSignal(config) {
+  const controller = new AbortController(); let timeoutId; let timedOut = false;
+  const abort = reason => controller.abort(reason instanceof Error ? reason : new CanceledError());
+  if (config.signal) config.signal.aborted ? abort(config.signal.reason) : config.signal.addEventListener('abort', () => abort(config.signal.reason), { once: true });
+  if (config.cancelToken) config.cancelToken.subscribe(abort);
+  if (config.timeout > 0) timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, config.timeout);
+  return { signal: controller.signal, timedOut: () => timedOut, clear: () => clearTimeout(timeoutId) };
+}
+function byteLength(value) {
+  if (value == null) return 0;
+  if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return value.size;
+  return undefined;
+}
+function progressEvent(loaded, total, bytes, started, upload) {
+  const seconds = Math.max((Date.now() - started) / 1000, 0.001);
+  const rate = loaded / seconds;
+  return { loaded, total, progress: total ? loaded / total : undefined, bytes, rate, estimated: total ? Math.max((total - loaded) / rate, 0) : undefined, lengthComputable: total != null, [upload ? 'upload' : 'download']: true };
+}
+let uploadStreamSupport;
+async function supportsStreamingUploadBody() {
+  if (uploadStreamSupport !== undefined) return uploadStreamSupport;
+  try {
+    const probe = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close(); } });
+    const request = new Request('https://example.invalid/', { method: 'POST', body: probe, duplex: 'half' });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    uploadStreamSupport = bytes.length === 3 && bytes[0] === 1 && bytes[1] === 2 && bytes[2] === 3;
+  } catch {
+    uploadStreamSupport = false;
+  }
+  return uploadStreamSupport;
+}
+function createTrackedUploadBody(data, callback, chunkSize = 64 * 1024) {
+  let bytes;
+  if (typeof data === 'string') bytes = new TextEncoder().encode(data);
+  else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+  else if (ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (!bytes) return null;
+  const total = bytes.byteLength;
+  const started = Date.now();
+  let offset = 0, loaded = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (offset >= total) { controller.close(); return; }
+      const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, total));
+      offset += chunk.byteLength;
+      loaded += chunk.byteLength;
+      controller.enqueue(chunk);
+      callback(progressEvent(loaded, total, chunk.byteLength, started, true));
+    }
+  }, { highWaterMark: 0 });
+}
+function limitResponseStream(body, config) {
+  if (!body || !(config.maxContentLength >= 0)) return body;
+  const reader = body.getReader(); let loaded = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) { controller.close(); return; }
+        loaded += value.byteLength;
+        if (loaded > config.maxContentLength) {
+          await reader.cancel();
+          controller.error(new AxiosError(`maxContentLength size of ${config.maxContentLength} exceeded`, AxiosError.ERR_BAD_RESPONSE, config));
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) { controller.error(error); }
+    },
+    cancel(reason) { return reader.cancel(reason); }
+  });
+}
+async function readResponse(response, config) {
+  const type = config.responseType;
+  const onProgress = config.onDownloadProgress;
+  const limit = config.maxContentLength;
+  if (type === 'stream') return limitResponseStream(response.body, config);
+  if ((!onProgress && !(limit >= 0)) || !response.body) {
+    if (type === 'arraybuffer') return response.arrayBuffer();
+    if (type === 'blob') return response.blob();
+    if (type === 'formdata') return response.formData();
+    if (type === 'document') {
+      const text = await response.text();
+      return typeof DOMParser === 'undefined' ? text : new DOMParser().parseFromString(text, response.headers.get('content-type') || 'text/html');
+    }
+    if (config.responseEncoding && config.responseEncoding.toLowerCase() !== 'utf-8') return new TextDecoder(config.responseEncoding).decode(await response.arrayBuffer());
+    return response.text();
+  }
+  const reader = response.body.getReader(), chunks = []; let loaded = 0;
+  const total = Number(response.headers.get('content-length')) || undefined;
+  const started = Date.now();
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break;
+    chunks.push(value); loaded += value.byteLength;
+    if (limit >= 0 && loaded > limit) { await reader.cancel(); throw new AxiosError(`maxContentLength size of ${limit} exceeded`, AxiosError.ERR_BAD_RESPONSE, config); }
+    if (onProgress) onProgress(progressEvent(loaded, total, value.byteLength, started, false));
+  }
+  const bytes = new Uint8Array(loaded); let offset = 0; chunks.forEach(c => { bytes.set(c, offset); offset += c.byteLength; });
+  if (type === 'arraybuffer') return bytes.buffer;
+  if (type === 'blob') return new Blob([bytes]);
+  if (type === 'formdata') return new Response(bytes, { headers: response.headers }).formData();
+  if (type === 'document') {
+    const text = new TextDecoder(config.responseEncoding || 'utf-8').decode(bytes);
+    return typeof DOMParser === 'undefined' ? text : new DOMParser().parseFromString(text, response.headers.get('content-type') || 'text/html');
+  }
+  return new TextDecoder(config.responseEncoding || 'utf-8').decode(bytes);
+}
+function readCookie(name) {
+  if (typeof document === 'undefined' || typeof document.cookie !== 'string') return null;
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+function applyXsrf(config, headers, url) {
+  if (!config.xsrfCookieName || !config.xsrfHeaderName || typeof window === 'undefined') return;
+  let allowed = config.withXSRFToken;
+  if (typeof allowed === 'function') allowed = allowed(config);
+  if (allowed === undefined) {
+    try { allowed = new URL(url, window.location.href).origin === window.location.origin; } catch { allowed = false; }
+  }
+  if (allowed) { const token = readCookie(config.xsrfCookieName); if (token) headers.set(config.xsrfHeaderName, token); }
+}
+function encodeUTF8(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return binary;
+}
+async function fetchAdapter(config) {
+  const headers = AxiosHeaders.from(config.headers); let data = config.data;
+  if (config.auth) headers.set('Authorization', `Basic ${btoa(encodeUTF8(`${config.auth.username || ''}:${config.auth.password || ''}`))}`);
+  if (isFormData(data)) headers.delete('Content-Type');
+  const url = getUri(config);
+  applyXsrf(config, headers, url);
+  const bodySize = byteLength(data);
+  if (config.maxBodyLength >= 0 && bodySize !== undefined && bodySize > config.maxBodyLength) throw new AxiosError(`Request body larger than maxBodyLength limit`, AxiosError.ERR_BAD_REQUEST, config);
+  const composed = composeSignal(config);
+  const credentials = config.credentials || (config.withCredentials === true ? 'include' : config.withCredentials === false ? 'omit' : 'same-origin');
+  let request;
+  try {
+    const method = config.method.toUpperCase();
+    const hasBody = !['GET', 'HEAD'].includes(method) && data != null;
+    const canTrackUpload = config.onUploadProgress && await supportsStreamingUploadBody();
+    const requestData = canTrackUpload ? (createTrackedUploadBody(data, config.onUploadProgress) || data) : data;
+    request = new Request(url, { ...config.fetchOptions, method, headers: headers.toJSON(), body: hasBody ? requestData : undefined, signal: composed.signal, credentials, redirect: config.maxRedirects === 0 ? 'manual' : config.fetchOptions && config.fetchOptions.redirect, ...(hasBody && requestData instanceof ReadableStream ? { duplex: 'half' } : {}) });
+    const fetchImpl = config.env && config.env.fetch || config.fetch || globalThis.fetch;
+    if (typeof fetchImpl !== 'function') throw new AxiosError('fetch is not supported by the environment', AxiosError.ERR_NOT_SUPPORT, config, request);
+    const raw = await fetchImpl(request);
+    const response = { data: await readResponse(raw, config), status: raw.status, statusText: raw.statusText, headers: new AxiosHeaders(raw.headers), config, request };
+    if (!config.validateStatus || config.validateStatus(response.status)) return response;
+    throw new AxiosError(`Request failed with status code ${response.status}`, response.status >= 500 ? AxiosError.ERR_BAD_RESPONSE : AxiosError.ERR_BAD_REQUEST, config, request, response);
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      if (error.config === undefined) { error.config = config; error.request = request; }
+      throw error;
+    }
+    if (composed.timedOut()) throw new AxiosError(`timeout of ${config.timeout}ms exceeded`, config.transitional && config.transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED, config, request);
+    if (composed.signal.aborted) {
+      const reason = composed.signal.reason;
+      if (reason && reason.__CANCEL__) {
+        if (reason.config === undefined) { reason.config = config; reason.request = request; }
+        throw reason;
+      }
+      const canceled = new CanceledError(reason && reason.message, config, request);
+      if (reason !== undefined) canceled.cause = reason;
+      throw canceled;
+    }
+    throw AxiosError.from(error, AxiosError.ERR_NETWORK, config, request);
+  } finally { composed.clear(); }
+}
+
+class Axios {
+  constructor(instanceConfig = {}) { this.defaults = instanceConfig; this.interceptors = { request: new InterceptorManager(), response: new InterceptorManager() }; }
+  request(configOrUrl, config) {
+    try { return this._request(configOrUrl, config); } catch (error) { return Promise.reject(error); }
+  }
+  _request(configOrUrl, config) {
+    let cfg;
+    try {
+      cfg = typeof configOrUrl === 'string' ? { ...(config || {}), url: configOrUrl } : (configOrUrl || {});
+      cfg = mergeConfig(this.defaults, cfg);
+      cfg.method = (cfg.method || this.defaults.method || 'get').toLowerCase();
+      assertTransitional(cfg.transitional);
+      cfg.headers = flattenHeaders(cfg.headers, cfg.method);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const requestHandlers = [], responseHandlers = []; let synchronous = true;
+    this.interceptors.request.forEach(i => {
+      if (i.runWhen && i.runWhen(cfg) === false) return;
+      synchronous = synchronous && i.synchronous;
+      requestHandlers.unshift(i);
+    });
+    this.interceptors.response.forEach(i => responseHandlers.push(i));
+    const checkCancel = (current, request) => {
+      if (!current.cancelToken) return;
+      try { current.cancelToken.throwIfRequested(); } catch (error) {
+        if (error.config === undefined) { error.config = current; error.request = request; }
+        throw error;
+      }
+    };
+    const dispatch = async current => {
+      checkCancel(current);
+      current.data = transformData(current.transformRequest, current, current.data, current.headers);
+      const adapter = getAdapter(current.adapter);
+      try {
+        const response = await adapter(current);
+        response.headers = AxiosHeaders.from(response.headers);
+        checkCancel(current, response.request);
+        response.data = transformData(current.transformResponse, current, response.data, response.headers, response);
+        return response;
+      } catch (error) {
+        if (error && error.response) {
+          error.response.headers = AxiosHeaders.from(error.response.headers);
+          error.response.data = transformData(current.transformResponse, current, error.response.data, error.response.headers, error.response);
+        }
+        throw error;
+      }
+    };
+    let promise;
+    if (synchronous) {
+      try {
+        for (const handler of requestHandlers) cfg = handler.fulfilled ? handler.fulfilled(cfg) : cfg;
+        promise = dispatch(cfg);
+      } catch (error) {
+        const rejected = requestHandlers.find(handler => handler.rejected);
+        promise = Promise.reject(rejected ? rejected.rejected(error) : error);
+      }
+    } else {
+      promise = Promise.resolve(cfg);
+      for (const handler of requestHandlers) promise = promise.then(handler.fulfilled, handler.rejected);
+      promise = promise.then(dispatch);
+    }
+    for (const handler of responseHandlers) promise = promise.then(handler.fulfilled, handler.rejected);
+    return promise;
+  }
+  getUri(config) { return getUri(mergeConfig(this.defaults, config)); }
+}
+for (const method of ['delete', 'get', 'head', 'options']) Axios.prototype[method] = function (url, config) { return this.request(url, { ...config, method }); };
+for (const method of ['post', 'put', 'patch', 'query']) {
+  Axios.prototype[method] = function (url, data, config) { return this.request(url, { ...config, method, data }); };
+  if (method !== 'query') {
+    Axios.prototype[`${method}Form`] = function (url, data, config) { return this.request(url, { ...config, method, data, headers: AxiosHeaders.concat(config && config.headers, { 'Content-Type': 'multipart/form-data' }) }); };
+  }
+}
+function createInstance(defaultConfig) {
+  const context = new Axios(defaultConfig); const instance = context.request.bind(context);
+  for (const key of Object.getOwnPropertyNames(Axios.prototype)) if (key !== 'constructor') instance[key] = Axios.prototype[key].bind(context);
+  Object.assign(instance, context);
+  instance.create = config => createInstance(mergeConfig(defaultConfig, config));
+  return instance;
+}
+
+function getAdapter(adapters) {
+  const list = [].concat(adapters == null ? ['fetch'] : adapters);
+  for (const candidate of list) {
+    if (typeof candidate === 'function') return candidate;
+    if (String(candidate).toLowerCase() === 'fetch') return fetchAdapter;
+  }
+  throw new AxiosError(`No suitable adapter found for ${list.join(', ')}`, AxiosError.ERR_NOT_SUPPORT);
+}
+
+const axios = createInstance(defaults);
+Object.assign(axios, {
+  Axios, AxiosError, CanceledError, Cancel: CanceledError, CancelToken, AxiosHeaders, AxiosURLSearchParams, HttpStatusCode, VERSION,
+  all: promises => Promise.all(promises), spread: callback => array => callback(...array),
+  isCancel: value => !!(value && value.__CANCEL__), isAxiosError: value => !!(value && value.isAxiosError === true),
+  toFormData, formToJSON, getAdapter,
+  mergeConfig
+});
+axios.default = axios;
+
+module.exports = axios;

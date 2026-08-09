@@ -1,0 +1,52 @@
+{
+  "name": "@barekit/lite-axios",
+  "version": "0.1.0",
+  "description": "A zero-dependency, fetch-based Axios-compatible HTTP client",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "./src/index.cjs",
+  "module": "./src/index.mjs",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.mjs",
+      "require": "./src/index.cjs",
+      "default": "./src/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "pretest": "npm run verify:esm",
+    "test": "node --test test/client.test.cjs test/differential.test.cjs test/fetch-parity.test.cjs",
+    "test:unit": "node --test test/client.test.cjs",
+    "test:compat": "node --test test/differential.test.cjs test/fetch-parity.test.cjs",
+    "test:pack": "node scripts/verify-packed-artifact.cjs",
+    "test:browser": "node --test test/browser.test.cjs",
+    "build:esm": "node scripts/build-esm.cjs",
+    "verify:esm": "node scripts/build-esm.cjs --check",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "axios": "^1.19.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "axios",
+    "fetch",
+    "http",
+    "typescript",
+    "zero-dependency"
+  ]
+}
