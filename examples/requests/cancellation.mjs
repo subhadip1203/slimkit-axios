@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const controller = new AbortController();
 const request = axios.get('https://api.example.com/slow', {

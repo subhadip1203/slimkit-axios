@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 try {
   await axios.get('https://api.example.com/users/missing');

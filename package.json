@@ -1,5 +1,5 @@
 {
-  "name": "@barekit/lite-axios",
+  "name": "@slimkit/axios",
   "version": "0.1.0",
   "description": "A zero-dependency, fetch-based Axios-compatible HTTP client",
   "license": "MIT",

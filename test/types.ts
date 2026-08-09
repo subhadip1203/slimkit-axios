@@ -5,7 +5,7 @@ import axios, {
   type AxiosRequestConfig,
   type AxiosResponse,
   type InternalAxiosRequestConfig
-} from '@barekit/lite-axios';
+} from '@slimkit/axios';
 
 interface User { id: number; name: string }
 interface CreateUser { name: string }

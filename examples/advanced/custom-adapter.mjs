@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const memoryAdapter = async config => ({
   data: { method: config.method, url: config.url, body: config.data },

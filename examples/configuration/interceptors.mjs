@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const api = axios.create({ baseURL: 'https://api.example.com' });
 

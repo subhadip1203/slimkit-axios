@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 await axios.post('https://api.example.com/upload', 'payload', {
   onUploadProgress({ loaded, total, progress, rate, estimated }) {

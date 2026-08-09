@@ -1,6 +1,6 @@
 # Examples
 
-These examples cover the supported `@barekit/lite-axios` API in focused, reusable files.
+These examples cover the supported `@slimkit/axios` API in focused, reusable files.
 
 | Example | Purpose | Run |
 | --- | --- | --- |

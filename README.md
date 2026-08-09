@@ -1,13 +1,13 @@
-# @barekit/lite-axios
+# @slimkit/axios
 
 A zero-dependency Axios-compatible HTTP client built on the standard `fetch` API. It runs in modern browsers and Node.js 18+, supports CommonJS and ES modules, and includes TypeScript declarations.
 
 ```bash
-npm install @barekit/lite-axios
+npm install @slimkit/axios
 ```
 
 ```ts
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const api = axios.create({ baseURL: 'https://api.example.com' });
 api.interceptors.request.use(config => {
@@ -23,7 +23,7 @@ const { data } = await api.get<User[]>('/users', { params: { active: true } });
 ### Basic requests
 
 ```js
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const users = await axios.get('https://api.example.com/users', {
   params: { active: true, roles: ['admin', 'editor'] }
@@ -40,7 +40,7 @@ console.log(users.data, created.status);
 CommonJS uses the same API:
 
 ```js
-const axios = require('@barekit/lite-axios');
+const axios = require('@slimkit/axios');
 ```
 
 ### Instances and interceptors
@@ -227,6 +227,6 @@ npm run build:esm
 npm run verify:esm
 ```
 
-The compatibility suite runs matching cases through Axios and `@barekit/lite-axios` for callable requests, aliases, URL construction, serializers, defaults, header precedence, interceptors, transforms, cancellation, errors, helpers, forms, and instance isolation. Network-level parity tests cover request construction, authentication, response fields, HTTP errors, status validation, binary and streaming responses, download progress, timeouts, and aborts.
+The compatibility suite runs matching cases through Axios and `@slimkit/axios` for callable requests, aliases, URL construction, serializers, defaults, header precedence, interceptors, transforms, cancellation, errors, helpers, forms, and instance isolation. Network-level parity tests cover request construction, authentication, response fields, HTTP errors, status validation, binary and streaming responses, download progress, timeouts, and aborts.
 
 `src/index.mjs` is generated from `src/index.cjs` rather than hand-maintained: a native browser ESM loader executes an imported `.cjs` file as a real module with no CommonJS interop, so a thin `import ... from './index.cjs'` wrapper fails outside Node/bundlers. `npm run build:esm` derives a standalone ESM build from the same source of truth; `npm test`'s `pretest` hook runs `verify:esm` automatically so the two files can't silently drift. `npm run test:browser` exercises the generated `index.mjs` directly in Chromium, Firefox, and WebKit — including a real per-engine check that upload progress behaves correctly (or safely stays silent, on Firefox) rather than corrupting the request body.

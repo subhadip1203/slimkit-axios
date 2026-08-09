@@ -1,4 +1,4 @@
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const response = await axios.get('https://api.example.com/users', {
   params: { active: true, roles: ['admin', 'editor'] }

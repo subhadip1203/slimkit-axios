@@ -1,5 +1,5 @@
 import http from 'node:http';
-import axios from '@barekit/lite-axios';
+import axios from '@slimkit/axios';
 
 const server = http.createServer((request, response) => {
   let body = '';

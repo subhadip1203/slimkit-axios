@@ -1,4 +1,4 @@
-const axios = require('@barekit/lite-axios');
+const axios = require('@slimkit/axios');
 
 async function main() {
   const { data } = await axios({

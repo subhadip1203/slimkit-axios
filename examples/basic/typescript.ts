@@ -1,4 +1,4 @@
-import axios, { type AxiosRequestConfig, type AxiosResponse } from '@barekit/lite-axios';
+import axios, { type AxiosRequestConfig, type AxiosResponse } from '@slimkit/axios';
 
 interface User {
   id: number;
