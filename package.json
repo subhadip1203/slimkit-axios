@@ -1,6 +1,6 @@
 {
   "name": "@slimkit/axios",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A zero-dependency, fetch-based Axios-compatible HTTP client",
   "license": "MIT",
   "type": "commonjs",
