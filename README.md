@@ -228,5 +228,3 @@ npm run verify:esm
 ```
 
 The compatibility suite runs matching cases through Axios and `@slimkit/axios` for callable requests, aliases, URL construction, serializers, defaults, header precedence, interceptors, transforms, cancellation, errors, helpers, forms, and instance isolation. Network-level parity tests cover request construction, authentication, response fields, HTTP errors, status validation, binary and streaming responses, download progress, timeouts, and aborts.
-
-`src/index.mjs` is generated from `src/index.cjs` rather than hand-maintained: a native browser ESM loader executes an imported `.cjs` file as a real module with no CommonJS interop, so a thin `import ... from './index.cjs'` wrapper fails outside Node/bundlers. `npm run build:esm` derives a standalone ESM build from the same source of truth; `npm test`'s `pretest` hook runs `verify:esm` automatically so the two files can't silently drift. `npm run test:browser` exercises the generated `index.mjs` directly in Chromium, Firefox, and WebKit — including a real per-engine check that upload progress behaves correctly (or safely stays silent, on Firefox) rather than corrupting the request body.
