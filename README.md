@@ -197,8 +197,6 @@ Options associated with unsupported transports may exist in the TypeScript reque
 
 Streaming request bodies require engine support for `ReadableStream` fetch bodies (the `duplex: 'half'` option). Firefox does not implement this: the library detects that at request time and transparently falls back to sending the full body without incremental progress, so `onUploadProgress` will not fire there even though the request itself completes normally. Chromium and WebKit both support streaming upload bodies and report incremental progress.
 
-See [`task.md`](./task.md) for the itemized implementation and verification checklist.
-
 ## Compatibility tests
 
 Axios is installed as a development-only dependency and used as the behavioral reference. It is not included as a runtime dependency or in the published package.
