@@ -124,7 +124,40 @@ try {
 }
 ```
 
-See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, and interceptor examples.
+### Automatic retry
+
+```js
+// Basic retry with exponential backoff
+await axios.get('/unstable-endpoint', {
+  retry: {
+    retries: 3,
+    retryDelay: 1000,
+    retryCondition: (error) => {
+      // Retry on network errors or 5xx status codes
+      return !error.response || error.response.status >= 500;
+    },
+    onRetry: (error, attempt, delay) => {
+      console.log(`Retry attempt ${attempt + 1} after ${delay}ms`);
+    }
+  }
+});
+
+// Instance-level retry configuration
+const api = axios.create({
+  baseURL: 'https://api.example.com',
+  retry: {
+    retries: 5,
+    retryDelay: 500,
+    retryCondition: (error) => {
+      const retryableCodes = ['ECONNABORTED', 'ETIMEDOUT', 'ECONNREFUSED', 'ERR_NETWORK'];
+      return retryableCodes.includes(error.code) || 
+             (error.response && error.response.status >= 500);
+    }
+  }
+});
+```
+
+See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, interceptor, and retry examples.
 
 ## Drop-in compatibility
 
@@ -163,6 +196,7 @@ The following APIs and behaviors are implemented as Axios-compatible replacement
 | ✅ | CommonJS, ES modules, and TypeScript generic request/response types |
 | ✅ | Modern browser support using the browser's native fetch implementation |
 | ✅ | Node.js 18+ support using the built-in fetch implementation |
+| ✅ | Automatic retry with exponential backoff and custom retry conditions |
 
 ## Not drop-in compatible
 
