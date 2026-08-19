@@ -148,6 +148,142 @@ class CancelToken {
   static source() { let cancel; return { token: new CancelToken(c => { cancel = c; }), cancel }; }
 }
 
+// Cache Manager with LRU eviction and TTL support
+class CacheManager {
+  constructor(config = {}) {
+    this.cache = new Map();
+    this.config = {
+      enabled: true,
+      ttl: 5 * 60 * 1000, // 5 minutes default
+      maxSize: 100, // Maximum 100 entries
+      cacheByDefault: false,
+      cachePredicate: (cfg) => cfg.method === 'get',
+      keyGenerator: this._defaultKeyGenerator.bind(this),
+      onCacheHit: () => {},
+      onCacheMiss: () => {},
+      onCacheWrite: () => {},
+      onCacheEvict: () => {},
+      ...config
+    };
+    this.accessOrder = new Map(); // Track access order for LRU
+  }
+
+  _defaultKeyGenerator(config) {
+    const { url, method, params, data } = config;
+    const paramsStr = params ? JSON.stringify(params) : '';
+    const dataStr = data ? JSON.stringify(data) : '';
+    return `${method}:${url}:${paramsStr}:${dataStr}`;
+  }
+
+  _isExpired(entry) {
+    return entry.expiresAt < Date.now();
+  }
+
+  _evictLRU() {
+    if (this.cache.size >= this.config.maxSize) {
+      // Get the least recently used key
+      const lruKey = this.accessOrder.keys().next().value;
+      if (lruKey) {
+        const value = this.cache.get(lruKey);
+        this.cache.delete(lruKey);
+        this.accessOrder.delete(lruKey);
+        this.config.onCacheEvict(lruKey, value);
+      }
+    }
+  }
+
+  _updateAccessOrder(key) {
+    this.accessOrder.delete(key);
+    this.accessOrder.set(key, Date.now());
+  }
+
+  get(key) {
+    if (!this.config.enabled) return null;
+
+    const entry = this.cache.get(key);
+    if (!entry) {
+      this.config.onCacheMiss({ key });
+      return null;
+    }
+
+    if (this._isExpired(entry)) {
+      this.delete(key);
+      this.config.onCacheMiss({ key });
+      return null;
+    }
+
+    this._updateAccessOrder(key);
+    this.config.onCacheHit({ key, entry });
+    return entry;
+  }
+
+  set(key, value) {
+    if (!this.config.enabled) return;
+
+    const entry = {
+      ...value,
+      timestamp: Date.now(),
+      expiresAt: Date.now() + (this.config.ttl || 0)
+    };
+
+    this._evictLRU();
+    this.cache.set(key, entry);
+    this._updateAccessOrder(key);
+    this.config.onCacheWrite({ key, entry });
+  }
+
+  has(key) {
+    if (!this.config.enabled) return false;
+    const entry = this.get(key);
+    return entry !== null;
+  }
+
+  delete(key) {
+    if (!this.config.enabled) return false;
+    const deleted = this.cache.delete(key);
+    this.accessOrder.delete(key);
+    return deleted;
+  }
+
+  clear() {
+    this.cache.clear();
+    this.accessOrder.clear();
+  }
+
+  size() {
+    return this.cache.size;
+  }
+
+  keys() {
+    return Array.from(this.cache.keys());
+  }
+
+  values() {
+    return Array.from(this.cache.values());
+  }
+
+  entries() {
+    return Array.from(this.cache.entries());
+  }
+
+  cleanup() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (this._isExpired(entry)) {
+        this.delete(key);
+      }
+    }
+  }
+
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+  }
+
+  getConfig() {
+    return { ...this.config };
+  }
+}
+
 class InterceptorManager {
   constructor() { this.handlers = []; }
   use(fulfilled, rejected, options = {}) { this.handlers.push({ fulfilled, rejected, synchronous: !!options.synchronous, runWhen: options.runWhen }); return this.handlers.length - 1; }
@@ -475,7 +611,11 @@ async function fetchAdapter(config) {
 }
 
 class Axios {
-  constructor(instanceConfig = {}) { this.defaults = instanceConfig; this.interceptors = { request: new InterceptorManager(), response: new InterceptorManager() }; }
+  constructor(instanceConfig = {}) { 
+    this.defaults = instanceConfig; 
+    this.interceptors = { request: new InterceptorManager(), response: new InterceptorManager() };
+    this.cache = new CacheManager(instanceConfig.cache);
+  }
   request(configOrUrl, config) {
     try { return this._request(configOrUrl, config); } catch (error) { return Promise.reject(error); }
   }
@@ -507,12 +647,49 @@ class Axios {
     const dispatch = async current => {
       checkCancel(current);
       current.data = transformData(current.transformRequest, current, current.data, current.headers);
+      
+      // Check cache if enabled and this is a cacheable request
+      const cacheConfig = current.cache || this.defaults.cache;
+      const shouldCache = cacheConfig && 
+        (cacheConfig.cacheByDefault || (cacheConfig.cachePredicate && cacheConfig.cachePredicate(current)));
+      
+      if (shouldCache && cacheConfig.enabled) {
+        const cacheKey = (cacheConfig.keyGenerator || this.cache._defaultKeyGenerator.bind(this.cache))(current);
+        const cachedEntry = this.cache.get(cacheKey);
+        
+        if (cachedEntry) {
+          // Return cached response
+          return {
+            data: cachedEntry.data,
+            status: cachedEntry.status,
+            statusText: cachedEntry.statusText,
+            headers: AxiosHeaders.from(cachedEntry.headers),
+            config: current,
+            request: undefined,
+            fromCache: true
+          };
+        }
+      }
+      
       const adapter = getAdapter(current.adapter);
+      
       try {
         const response = await adapter(current);
         response.headers = AxiosHeaders.from(response.headers);
         checkCancel(current, response.request);
         response.data = transformData(current.transformResponse, current, response.data, response.headers, response);
+        
+        // Cache the response if caching is enabled and this is a cacheable request
+        if (shouldCache && cacheConfig.enabled && response.status >= 200 && response.status < 300) {
+          const cacheKey = (cacheConfig.keyGenerator || this.cache._defaultKeyGenerator.bind(this.cache))(current);
+          this.cache.set(cacheKey, {
+            data: response.data,
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers.toJSON()
+          });
+        }
+        
         return response;
       } catch (error) {
         if (error && error.response) {
@@ -540,6 +717,13 @@ class Axios {
     return promise;
   }
   getUri(config) { return getUri(mergeConfig(this.defaults, config)); }
+  
+  // Cache management methods
+  clearCache() { this.cache.clear(); }
+  getCache() { return this.cache; }
+  setCacheConfig(config) { this.cache.setConfig(config); }
+  getCacheConfig() { return this.cache.getConfig(); }
+  cleanupCache() { this.cache.cleanup(); }
 }
 for (const method of ['delete', 'get', 'head', 'options']) Axios.prototype[method] = function (url, config) { return this.request(url, { ...config, method }); };
 for (const method of ['post', 'put', 'patch', 'query']) {
@@ -571,7 +755,7 @@ Object.assign(axios, {
   all: promises => Promise.all(promises), spread: callback => array => callback(...array),
   isCancel: value => !!(value && value.__CANCEL__), isAxiosError: value => !!(value && value.isAxiosError === true),
   toFormData, formToJSON, getAdapter,
-  mergeConfig
+  mergeConfig, CacheManager
 });
 axios.default = axios;
 
