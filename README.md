@@ -124,7 +124,40 @@ try {
 }
 ```
 
-See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, and interceptor examples.
+### Request caching
+
+```js
+// Basic caching with TTL
+await axios.get('/users', {
+  cache: {
+    enabled: true,
+    ttl: 5 * 60 * 1000, // 5 minutes
+    maxSize: 100,
+    cacheByDefault: true
+  }
+});
+
+// Instance-level caching configuration
+const api = axios.create({
+  baseURL: 'https://api.example.com',
+  cache: {
+    enabled: true,
+    ttl: 10 * 60 * 1000, // 10 minutes
+    cachePredicate: (config) => config.method === 'get',
+    onCacheHit: (config, cachedResponse) => {
+      console.log('Cache hit for:', config.url);
+    }
+  }
+});
+
+// Cache management
+api.clearCache(); // Clear all cache
+api.cleanupCache(); // Remove expired entries
+const cacheManager = api.getCache();
+console.log('Cache size:', cacheManager.size());
+```
+
+See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, interceptor, and cache examples.
 
 ## Drop-in compatibility
 
@@ -163,6 +196,7 @@ The following APIs and behaviors are implemented as Axios-compatible replacement
 | ✅ | CommonJS, ES modules, and TypeScript generic request/response types |
 | ✅ | Modern browser support using the browser's native fetch implementation |
 | ✅ | Node.js 18+ support using the built-in fetch implementation |
+| ✅ | Request caching with LRU eviction and TTL support |
 
 ## Not drop-in compatible
 
