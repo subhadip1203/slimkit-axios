@@ -148,6 +148,45 @@ class CancelToken {
   static source() { let cancel; return { token: new CancelToken(c => { cancel = c; }), cancel }; }
 }
 
+// Retry utility function
+async function retryAdapter(adapter, config) {
+  const { retry: retryConfig = {} } = config;
+  const { 
+    retries = 3, 
+    retryDelay = 1000, 
+    retryCondition = (error) => !!error,
+    onRetry = () => {}
+  } = retryConfig;
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await adapter(config);
+    } catch (error) {
+      lastError = error;
+      
+      // Check if we should retry this error
+      const shouldRetry = retryCondition(error, attempt);
+      
+      // Don't retry if this was the last attempt or if condition says no
+      if (attempt === retries || !shouldRetry) {
+        throw error;
+      }
+      
+      // Calculate delay with exponential backoff
+      const delay = retryDelay * Math.pow(2, attempt);
+      
+      // Call retry callback
+      onRetry(error, attempt, delay);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError;
+}
+
 class InterceptorManager {
   constructor() { this.handlers = []; }
   use(fulfilled, rejected, options = {}) { this.handlers.push({ fulfilled, rejected, synchronous: !!options.synchronous, runWhen: options.runWhen }); return this.handlers.length - 1; }
@@ -508,8 +547,15 @@ class Axios {
       checkCancel(current);
       current.data = transformData(current.transformRequest, current, current.data, current.headers);
       const adapter = getAdapter(current.adapter);
+      
+      // Use retry adapter if retry config is present
+      const shouldRetry = current.retry && Object.keys(current.retry).length > 0;
+      const executeAdapter = shouldRetry ? 
+        () => retryAdapter(adapter, current) : 
+        () => adapter(current);
+      
       try {
-        const response = await adapter(current);
+        const response = await executeAdapter();
         response.headers = AxiosHeaders.from(response.headers);
         checkCancel(current, response.request);
         response.data = transformData(current.transformResponse, current, response.data, response.headers, response);

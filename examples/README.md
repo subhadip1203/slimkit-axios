@@ -15,6 +15,8 @@ These examples cover the supported `@slimkit/axios` API in focused, reusable fil
 | [`requests/cancellation.mjs`](./requests/cancellation.mjs) | AbortController, CancelToken, and timeout | Import into an application |
 | [`requests/progress.mjs`](./requests/progress.mjs) | Upload and download progress | Import into an application |
 | [`requests/errors.mjs`](./requests/errors.mjs) | Axios errors and status validation | Import into an application |
+| [`requests/retry.mjs`](./requests/retry.mjs) | Automatic retry with exponential backoff | Import into an application |
+| [`requests/retry.ts`](./requests/retry.ts) | Typed retry configuration with TypeScript | `npm run typecheck` |
 | [`advanced/custom-fetch.mjs`](./advanced/custom-fetch.mjs) | Custom fetch implementation | Import into an application |
 | [`advanced/custom-adapter.mjs`](./advanced/custom-adapter.mjs) | Custom adapter | `node examples/advanced/custom-adapter.mjs` |
 

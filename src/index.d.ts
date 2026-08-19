@@ -19,7 +19,7 @@ export interface FormDataVisitorHelpers {
 }
 export type SerializerVisitor = (this: GenericFormData, value: any, key: string, path: string[] | undefined, helpers: FormDataVisitorHelpers) => boolean | void;
 export interface SerializerOptions { visitor?: SerializerVisitor; dots?: boolean; metaTokens?: boolean; indexes?: boolean | null; maxDepth?: number; Blob?: new (...args: any[]) => any; }
-export interface FormSerializerOptions extends SerializerOptions {}
+export interface FormSerializerOptions extends SerializerOptions { }
 export type AddressFamily = 4 | 6 | undefined;
 export interface LookupAddressEntry { address: string; family?: AddressFamily; }
 export type LookupAddress = string | LookupAddressEntry;
@@ -41,6 +41,12 @@ export class AxiosHeaders {
 }
 export interface AxiosProgressEvent { loaded: number; total?: number; progress?: number; bytes: number; rate?: number; estimated?: number; upload?: boolean; download?: boolean; lengthComputable: boolean; event?: any; }
 export interface TransitionalOptions { silentJSONParsing?: boolean; forcedJSONParsing?: boolean; clarifyTimeoutError?: boolean; legacyInterceptorReqResOrdering?: boolean; advertiseZstdAcceptEncoding?: boolean; validateStatusUndefinedResolves?: boolean; }
+export interface RetryConfig {
+  retries?: number;
+  retryDelay?: number;
+  retryCondition?: (error: any, attempt: number) => boolean;
+  onRetry?: (error: any, attempt: number, delay: number) => void;
+}
 export interface ParamsSerializerOptions extends SerializerOptions { encode?: (param: string) => string; serialize?: (params: Record<string, unknown>, options?: ParamsSerializerOptions) => string; }
 export interface AxiosRequestConfig<D = any> {
   url?: string; method?: Method | string; baseURL?: string; allowAbsoluteUrls?: boolean; headers?: (RawAxiosRequestHeaders & Partial<HeadersDefaults>) | AxiosHeaders;
@@ -56,6 +62,7 @@ export interface AxiosRequestConfig<D = any> {
   proxy?: AxiosProxyConfig | false; httpAgent?: any; httpsAgent?: any; socketPath?: string | null; allowedSocketPaths?: string | string[] | null; decompress?: boolean;
   insecureHTTPParser?: boolean; beforeRedirect?: Function; transport?: any; family?: AddressFamily; lookup?: Function;
   httpVersion?: 1 | 2; http2Options?: Record<string, any>; formDataHeaderPolicy?: 'legacy' | 'content-only'; redact?: string[]; sensitiveHeaders?: string[];
+  retry?: RetryConfig;
 }
 export type RawAxiosRequestConfig<D = any> = AxiosRequestConfig<D>;
 export interface HeadersDefaults {
@@ -139,7 +146,7 @@ export interface AxiosStatic extends AxiosInstance {
   Axios: typeof Axios; AxiosError: typeof AxiosError; CanceledError: typeof CanceledError; Cancel: typeof CanceledError; CancelToken: typeof CancelToken;
   AxiosHeaders: typeof AxiosHeaders; AxiosURLSearchParams: typeof AxiosURLSearchParams; HttpStatusCode: typeof HttpStatusCode; readonly VERSION: string;
   isCancel: typeof isCancel; isAxiosError: typeof isAxiosError; all: typeof all; spread: typeof spread; toFormData: typeof toFormData;
-  formToJSON: typeof formToJSON; getAdapter: typeof getAdapter; mergeConfig: typeof mergeConfig;
+  formToJSON: typeof formToJSON; getAdapter: typeof getAdapter; mergeConfig: typeof mergeConfig; RetryConfig: RetryConfig;
 }
 declare const axios: AxiosStatic;
 export default axios;
