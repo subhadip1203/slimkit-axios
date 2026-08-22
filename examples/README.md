@@ -15,6 +15,10 @@ These examples cover the supported `@slimkit/axios` API in focused, reusable fil
 | [`requests/cancellation.mjs`](./requests/cancellation.mjs) | AbortController, CancelToken, and timeout | Import into an application |
 | [`requests/progress.mjs`](./requests/progress.mjs) | Upload and download progress | Import into an application |
 | [`requests/errors.mjs`](./requests/errors.mjs) | Axios errors and status validation | Import into an application |
+| [`requests/cache.mjs`](./requests/cache.mjs) | Request caching with LRU eviction | Import into an application |
+| [`requests/cache.ts`](./requests/cache.ts) | Typed cache configuration with TypeScript | `npm run typecheck` |
+| [`requests/circuit-breaker.mjs`](./requests/circuit-breaker.mjs) | Circuit breaker pattern for resilience | Import into an application |
+| [`requests/circuit-breaker.ts`](./requests/circuit-breaker.ts) | Typed circuit breaker with TypeScript | `npm run typecheck` |
 | [`advanced/custom-fetch.mjs`](./advanced/custom-fetch.mjs) | Custom fetch implementation | Import into an application |
 | [`advanced/custom-adapter.mjs`](./advanced/custom-adapter.mjs) | Custom adapter | `node examples/advanced/custom-adapter.mjs` |
 

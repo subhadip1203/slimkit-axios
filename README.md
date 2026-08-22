@@ -124,7 +124,76 @@ try {
 }
 ```
 
-See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, and interceptor examples.
+### Request caching
+
+```js
+// Basic caching with TTL
+await axios.get('/users', {
+  cache: {
+    enabled: true,
+    ttl: 5 * 60 * 1000, // 5 minutes
+    maxSize: 100,
+    cacheByDefault: true
+  }
+});
+
+// Instance-level caching configuration
+const api = axios.create({
+  baseURL: 'https://api.example.com',
+  cache: {
+    enabled: true,
+    ttl: 10 * 60 * 1000, // 10 minutes
+    cachePredicate: (config) => config.method === 'get',
+    onCacheHit: (config, cachedResponse) => {
+      console.log('Cache hit for:', config.url);
+    }
+  }
+});
+
+// Cache management
+api.clearCache(); // Clear all cache
+api.cleanupCache(); // Remove expired entries
+const cacheManager = api.getCache();
+console.log('Cache size:', cacheManager.size());
+```
+
+### Circuit breaker pattern
+
+```js
+// Basic circuit breaker configuration
+const api = axios.create({
+  baseURL: 'https://api.example.com',
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 5,      // Open after 5 failures
+    recoveryTimeout: 60000,   // Try recovery after 1 minute
+    timeout: 30000,           // Individual request timeout
+    successThreshold: 2,      // Successes required to close circuit
+    onStateChange: (state, context) => {
+      console.log(`Circuit breaker state: ${state}`);
+    }
+  }
+});
+
+// Circuit breaker with fallback
+const resilientApi = axios.create({
+  baseURL: 'https://api.example.com',
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 3,
+    recoveryTimeout: 30000,
+    onFallback: (error, context) => {
+      console.log('Using fallback for:', context.url);
+      return { data: { fallback: true }, status: 200 };
+    }
+  }
+});
+
+// Circuit breaker management
+const stats = api.getCircuitBreaker().getStats();
+console.log('Circuit breaker state:', stats.state);
+api.resetCircuitBreaker(); // Manually reset circuit
+```
 
 ## Drop-in compatibility
 
@@ -163,6 +232,7 @@ The following APIs and behaviors are implemented as Axios-compatible replacement
 | ✅ | CommonJS, ES modules, and TypeScript generic request/response types |
 | ✅ | Modern browser support using the browser's native fetch implementation |
 | ✅ | Node.js 18+ support using the built-in fetch implementation |
+| ✅ | Request caching with LRU eviction and TTL support |
 
 ## Not drop-in compatible
 
