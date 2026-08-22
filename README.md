@@ -157,7 +157,43 @@ const cacheManager = api.getCache();
 console.log('Cache size:', cacheManager.size());
 ```
 
-See the complete [`examples/`](./examples/) catalog for TypeScript, browser, Node.js, custom fetch, custom adapter, serialization, interceptor, and cache examples.
+### Circuit breaker pattern
+
+```js
+// Basic circuit breaker configuration
+const api = axios.create({
+  baseURL: 'https://api.example.com',
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 5,      // Open after 5 failures
+    recoveryTimeout: 60000,   // Try recovery after 1 minute
+    timeout: 30000,           // Individual request timeout
+    successThreshold: 2,      // Successes required to close circuit
+    onStateChange: (state, context) => {
+      console.log(`Circuit breaker state: ${state}`);
+    }
+  }
+});
+
+// Circuit breaker with fallback
+const resilientApi = axios.create({
+  baseURL: 'https://api.example.com',
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 3,
+    recoveryTimeout: 30000,
+    onFallback: (error, context) => {
+      console.log('Using fallback for:', context.url);
+      return { data: { fallback: true }, status: 200 };
+    }
+  }
+});
+
+// Circuit breaker management
+const stats = api.getCircuitBreaker().getStats();
+console.log('Circuit breaker state:', stats.state);
+api.resetCircuitBreaker(); // Manually reset circuit
+```
 
 ## Drop-in compatibility
 

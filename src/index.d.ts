@@ -41,6 +41,18 @@ export class AxiosHeaders {
 }
 export interface AxiosProgressEvent { loaded: number; total?: number; progress?: number; bytes: number; rate?: number; estimated?: number; upload?: boolean; download?: boolean; lengthComputable: boolean; event?: any; }
 export interface TransitionalOptions { silentJSONParsing?: boolean; forcedJSONParsing?: boolean; clarifyTimeoutError?: boolean; legacyInterceptorReqResOrdering?: boolean; advertiseZstdAcceptEncoding?: boolean; validateStatusUndefinedResolves?: boolean; }
+export interface CircuitBreakerConfig {
+  enabled?: boolean;
+  failureThreshold?: number; // Number of failures before opening circuit
+  recoveryTimeout?: number; // Time in milliseconds before attempting recovery
+  timeout?: number; // Individual request timeout in milliseconds
+  resetTimeout?: number; // Time in half-open state before closing circuit
+  successThreshold?: number; // Number of successes required to close circuit
+  onStateChange?: (state: 'closed' | 'open' | 'half-open', context: any) => void; // Callback when state changes
+  onFallback?: (error: any, context: any) => any; // Fallback response when circuit is open
+  rollingCountTimeout?: number; // Time window for counting failures
+  rollingCountBuckets?: number; // Number of time buckets for rolling count
+}
 export interface CacheConfig {
   enabled?: boolean;
   ttl?: number; // Time to live in milliseconds
@@ -76,7 +88,9 @@ export interface AxiosRequestConfig<D = any> {
   proxy?: AxiosProxyConfig | false; httpAgent?: any; httpsAgent?: any; socketPath?: string | null; allowedSocketPaths?: string | string[] | null; decompress?: boolean;
   insecureHTTPParser?: boolean; beforeRedirect?: Function; transport?: any; family?: AddressFamily; lookup?: Function;
   httpVersion?: 1 | 2; http2Options?: Record<string, any>; formDataHeaderPolicy?: 'legacy' | 'content-only'; redact?: string[]; sensitiveHeaders?: string[];
+  retry?: RetryConfig;
   cache?: CacheConfig;
+  circuitBreaker?: CircuitBreakerConfig;
 }
 export type RawAxiosRequestConfig<D = any> = AxiosRequestConfig<D>;
 export interface HeadersDefaults {
@@ -123,6 +137,10 @@ export class Axios {
   setCacheConfig(config: CacheConfig): void;
   getCacheConfig(): CacheConfig;
   cleanupCache(): void;
+  getCircuitBreaker(): CircuitBreaker;
+  setCircuitBreakerConfig(config: CircuitBreakerConfig): void;
+  getCircuitBreakerConfig(): CircuitBreakerConfig;
+  resetCircuitBreaker(): void;
   get<T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
   delete<T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
   head<T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
@@ -165,6 +183,15 @@ export class CacheManager<T = any> {
   setConfig(config: CacheConfig): void;
   getConfig(): CacheConfig;
 }
+export class CircuitBreaker {
+  constructor(config?: CircuitBreakerConfig);
+  execute<T>(fn: () => Promise<T>, context?: any): Promise<T>;
+  getState(): 'closed' | 'open' | 'half-open';
+  reset(): void;
+  getStats(): { state: string; failureCount: number; successCount: number; lastFailureTime: number };
+  setConfig(config: CircuitBreakerConfig): void;
+  getConfig(): CircuitBreakerConfig;
+}
 export const VERSION: string;
 export const HttpStatusCode: Readonly<Record<string, number>>;
 export function isCancel(value: any): value is CanceledError;
@@ -181,6 +208,7 @@ export interface AxiosStatic extends AxiosInstance {
   AxiosHeaders: typeof AxiosHeaders; AxiosURLSearchParams: typeof AxiosURLSearchParams; HttpStatusCode: typeof HttpStatusCode; readonly VERSION: string;
   isCancel: typeof isCancel; isAxiosError: typeof isAxiosError; all: typeof all; spread: typeof spread; toFormData: typeof toFormData;
   formToJSON: typeof formToJSON; getAdapter: typeof getAdapter; mergeConfig: typeof mergeConfig; CacheConfig: CacheConfig; CacheManager: typeof CacheManager; CacheEntry: typeof CacheEntry;
+  CircuitBreakerConfig: CircuitBreakerConfig; CircuitBreaker: typeof CircuitBreaker;
 }
 declare const axios: AxiosStatic;
 export default axios;

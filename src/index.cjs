@@ -284,6 +284,219 @@ class CacheManager {
   }
 }
 
+// Circuit Breaker with state machine pattern
+class CircuitBreaker {
+  constructor(config = {}) {
+    this.config = {
+      enabled: true,
+      failureThreshold: 5,      // Open after 5 failures
+      recoveryTimeout: 60000,   // Try recovery after 1 minute
+      timeout: 30000,            // Individual request timeout
+      resetTimeout: 30000,      // Time in half-open state before closing
+      successThreshold: 2,      // Successes required to close circuit
+      onStateChange: () => {},
+      onFallback: () => {},
+      rollingCountTimeout: 10000, // 10 second rolling window
+      rollingCountBuckets: 10,    // 1 second buckets
+      ...config
+    };
+    
+    this.state = 'closed'; // closed, open, half-open
+    this.failureCount = 0;
+    this.successCount = 0;
+    this.lastFailureTime = 0;
+    this.nextAttemptTime = 0;
+    this.rollingFailures = [];
+    
+    // Initialize rolling window buckets
+    this.bucketInterval = this.config.rollingCountTimeout / this.config.rollingCountBuckets;
+    this.currentBucket = 0;
+    this.bucketFailures = new Array(this.config.rollingCountBuckets).fill(0);
+    
+    // Start bucket rotation
+    this._startBucketRotation();
+  }
+  
+  _startBucketRotation() {
+    this.bucketIntervalId = setInterval(() => {
+      this._rotateBucket();
+    }, this.bucketInterval);
+  }
+  
+  _rotateBucket() {
+    this.currentBucket = (this.currentBucket + 1) % this.config.rollingCountBuckets;
+    this.bucketFailures[this.currentBucket] = 0;
+  }
+  
+  _recordFailure() {
+    this.bucketFailures[this.currentBucket]++;
+    this.failureCount = this.bucketFailures.reduce((a, b) => a + b, 0);
+    this.lastFailureTime = Date.now();
+  }
+  
+  _getState() {
+    const now = Date.now();
+    
+    // Check if we should transition from open to half-open
+    if (this.state === 'open' && now >= this.nextAttemptTime) {
+      this._transitionTo('half-open');
+    }
+    
+    // Check if we should transition from half-open to closed
+    if (this.state === 'half-open' && this.successCount >= this.config.successThreshold) {
+      this._transitionTo('closed');
+    }
+    
+    return this.state;
+  }
+  
+  _transitionTo(newState) {
+    const oldState = this.state;
+    this.state = newState;
+    
+    if (newState === 'closed') {
+      this.failureCount = 0;
+      this.successCount = 0;
+      this.bucketFailures.fill(0);
+    } else if (newState === 'open') {
+      this.nextAttemptTime = Date.now() + this.config.recoveryTimeout;
+      this.successCount = 0;
+    } else if (newState === 'half-open') {
+      this.successCount = 0;
+    }
+    
+    this.config.onStateChange(newState, { oldState, failureCount: this.failureCount });
+  }
+  
+  _shouldAttemptRequest() {
+    if (!this.config.enabled) return true;
+    
+    const currentState = this._getState();
+    
+    if (currentState === 'closed') {
+      return true;
+    }
+    
+    if (currentState === 'open') {
+      return false; // Circuit is open, use fallback
+    }
+    
+    if (currentState === 'half-open') {
+      return true; // Allow test request
+    }
+    
+    return true;
+  }
+  
+  async execute(fn, context = {}) {
+    if (!this.config.enabled) {
+      return await fn();
+    }
+    
+    if (!this._shouldAttemptRequest()) {
+      const error = new Error('Circuit breaker is OPEN');
+      error.circuitBreakerState = this.state;
+      error.isCircuitBreakerError = true;
+      
+      // Try fallback
+      try {
+        const fallback = this.config.onFallback(error, context);
+        if (fallback !== undefined) {
+          return fallback;
+        }
+      } catch (fallbackError) {
+        // Ignore fallback errors
+      }
+      
+      throw error;
+    }
+    
+    try {
+      // Add timeout if configured
+      let timeoutId;
+      const timeoutPromise = new Promise((_, reject) => {
+        if (this.config.timeout > 0) {
+          timeoutId = setTimeout(() => {
+            reject(new Error('Request timeout'));
+          }, this.config.timeout);
+        }
+      });
+      
+      const result = await Promise.race([
+        fn(),
+        timeoutPromise
+      ]);
+      
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      // Success
+      if (this.state === 'half-open') {
+        this.successCount++;
+      }
+      
+      // If in closed state and we had failures, reduce them
+      if (this.state === 'closed' && this.failureCount > 0) {
+        this.failureCount = Math.max(0, this.failureCount - 1);
+      }
+      
+      return result;
+    } catch (error) {
+      // Failure
+      this._recordFailure();
+      
+      // Check if we should open the circuit
+      if (this.failureCount >= this.config.failureThreshold) {
+        this._transitionTo('open');
+      }
+      
+      throw error;
+    }
+  }
+  
+  getState() {
+    return this._getState();
+  }
+  
+  reset() {
+    this._transitionTo('closed');
+    this.bucketFailures.fill(0);
+    this.failureCount = 0;
+    this.successCount = 0;
+  }
+  
+  getStats() {
+    return {
+      state: this._getState(),
+      failureCount: this.failureCount,
+      successCount: this.successCount,
+      lastFailureTime: this.lastFailureTime,
+      nextAttemptTime: this.nextAttemptTime,
+      rollingFailures: this.bucketFailures
+    };
+  }
+  
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+    
+    // Restart bucket rotation if interval changed
+    if (this.bucketIntervalId) {
+      clearInterval(this.bucketIntervalId);
+      this.bucketInterval = this.config.rollingCountTimeout / this.config.rollingCountBuckets;
+      this._startBucketRotation();
+    }
+  }
+  
+  getConfig() {
+    return { ...this.config };
+  }
+  
+  destroy() {
+    if (this.bucketIntervalId) {
+      clearInterval(this.bucketIntervalId);
+    }
+  }
+}
+
 class InterceptorManager {
   constructor() { this.handlers = []; }
   use(fulfilled, rejected, options = {}) { this.handlers.push({ fulfilled, rejected, synchronous: !!options.synchronous, runWhen: options.runWhen }); return this.handlers.length - 1; }
@@ -615,6 +828,7 @@ class Axios {
     this.defaults = instanceConfig; 
     this.interceptors = { request: new InterceptorManager(), response: new InterceptorManager() };
     this.cache = new CacheManager(instanceConfig.cache);
+    this.circuitBreaker = new CircuitBreaker(instanceConfig.circuitBreaker);
   }
   request(configOrUrl, config) {
     try { return this._request(configOrUrl, config); } catch (error) { return Promise.reject(error); }
@@ -673,8 +887,14 @@ class Axios {
       
       const adapter = getAdapter(current.adapter);
       
+      // Use circuit breaker if enabled
+      const shouldUseCircuitBreaker = current.circuitBreaker || this.defaults.circuitBreaker;
+      const executeAdapter = shouldUseCircuitBreaker && shouldUseCircuitBreaker.enabled ? 
+        () => this.circuitBreaker.execute(() => adapter(current), current) : 
+        () => adapter(current);
+      
       try {
-        const response = await adapter(current);
+        const response = await executeAdapter();
         response.headers = AxiosHeaders.from(response.headers);
         checkCancel(current, response.request);
         response.data = transformData(current.transformResponse, current, response.data, response.headers, response);
@@ -724,6 +944,12 @@ class Axios {
   setCacheConfig(config) { this.cache.setConfig(config); }
   getCacheConfig() { return this.cache.getConfig(); }
   cleanupCache() { this.cache.cleanup(); }
+  
+  // Circuit breaker management methods
+  getCircuitBreaker() { return this.circuitBreaker; }
+  setCircuitBreakerConfig(config) { this.circuitBreaker.setConfig(config); }
+  getCircuitBreakerConfig() { return this.circuitBreaker.getConfig(); }
+  resetCircuitBreaker() { this.circuitBreaker.reset(); }
 }
 for (const method of ['delete', 'get', 'head', 'options']) Axios.prototype[method] = function (url, config) { return this.request(url, { ...config, method }); };
 for (const method of ['post', 'put', 'patch', 'query']) {
@@ -755,7 +981,7 @@ Object.assign(axios, {
   all: promises => Promise.all(promises), spread: callback => array => callback(...array),
   isCancel: value => !!(value && value.__CANCEL__), isAxiosError: value => !!(value && value.isAxiosError === true),
   toFormData, formToJSON, getAdapter,
-  mergeConfig, CacheManager
+  mergeConfig, CacheManager, CircuitBreaker
 });
 axios.default = axios;
 
